@@ -5,5 +5,5 @@ format: jb-book
 root: intro
 chapters:
 - file: crawling_detik.ipynb
-# - file: notebooks
-# - file: markdown-notebooks
+- file: Preprocessing.ipynb
+- file: Data understanding.ipynb
