@@ -7,3 +7,4 @@ chapters:
 - file: crawling_detik.ipynb
 - file: Preprocessing.ipynb
 - file: Data understanding.ipynb
+- file: klasifikasi_tfidf.ipynb
