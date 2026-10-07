@@ -7,3 +7,5 @@ Sastrawi
 trafilatura
 requests
 beautifulsoup4
+matplotlib
+seaborn
