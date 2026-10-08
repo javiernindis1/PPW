@@ -8,3 +8,4 @@ chapters:
 - file: Preprocessing.ipynb
 - file: Data understanding.ipynb
 - file: klasifikasi_tfidf.ipynb
+- file: UTS_Klasifikasi_Skipgram_NaiveBayes_LiveCrawl.ipynb
