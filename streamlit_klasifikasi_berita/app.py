@@ -1,4 +1,5 @@
 import re
+import os
 import pickle
 from urllib.parse import urlparse
 from collections import Counter
@@ -28,7 +29,9 @@ st.set_page_config(
 # LOAD MODEL
 # ============================================================
 
-MODEL_PATH = "model.pkl"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "model.pkl")
+
 
 
 @st.cache_resource
