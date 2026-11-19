@@ -10,3 +10,4 @@ chapters:
 - file: klasifikasi_tfidf.ipynb
 - file: UTS_Klasifikasi_Skipgram_NaiveBayes_LiveCrawl.ipynb
 - file: Tugas_Graph_Mining.ipynb
+- file: web_crawling_analysis_fixed.ipynb
