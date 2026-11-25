@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Crawl Results - {{ job.url }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .graph-container iframe {
+        border: none;
+        width: 100%;
+        height: 600px;
+        border-radius: 0.5rem;
+    }
+    .table th {
+        white-space: nowrap;
+    }
+    .url-cell {
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .rank-number {
+        font-weight: 700;
+        color: #2c3e50;
+    }
+    @media (max-width: 768px) {
+        .graph-container iframe {
+            height: 400px;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Results</li>
+            </ol>
+        </nav>
+        <h2 class="mt-3 mb-1"><i class="bi bi-graph-up me-2"></i>Crawl Results</h2>
+        <p class="text-muted">{{ job.url }} &mdash; {{ job.result.pages_crawled }} pages crawled</p>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-spider display-4 text-primary"></i>
+                <h3 class="mt-2">{{ job.result.pages_crawled }}</h3>
+                <p class="text-muted mb-0">Pages Crawled</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-diagram-3 display-4 text-primary"></i>
+                <h3 class="mt-2">{{ job.result.top_10|length }}</h3>
+                <p class="text-muted mb-0">Top Pages Ranked</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-link-45deg display-4 text-primary"></i>
+                <h3 class="mt-2">
+                    {% if job.result.graph_html %}
+                        {{ job.result.graph_html | length | filesizeformat }}
+                    {% else %}
+                        N/A
+                    {% endif %}
+                </h3>
+                <p class="text-muted mb-0">Graph Size</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Graph Visualization -->
+<div class="row mb-4" id="graphSection">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Interactive Link Graph</h5>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-secondary" onclick="resetGraphView()" title="Reset View">
+                        <i class="bi bi-arrows-fullscreen"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0 graph-container">
+                {% if job.result.graph_html %}
+                    <iframe
+                        id="graphFrame"
+                        src="{{ url_for('graph_view', job_id=job.id) }}"
+                        title="Interactive Link Graph"
+                        loading="eager"
+                        allow="fullscreen">
+                    </iframe>
+                {% else %}
+                    <div class="text-center py-5 text-muted">
+                        <i class="bi bi-exclamation-triangle display-4"></i>
+                        <p class="mt-3">Graph visualization not available</p>
+                    </div>
+                {% endif %}
+            </div>
+            <div class="card-footer text-muted small">
+                <i class="bi bi-mouse me-1"></i>Drag to pan, scroll to zoom, click a node or URL in the table to show that node and its directly connected nodes. Node size and color indicate PageRank score.
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top 10 PageRank Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-trophy me-2"></i>Top 10 Pages by PageRank</h5>
+            </div>
+            <div class="card-body p-0">
+                {% if job.result.top_10 %}
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width: 60px;">Rank</th>
+                                <th>URL</th>
+                                <th style="width: 150px;">PageRank Score</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for url, score in job.result.top_10 %}
+                            <tr>
+                                <td><span class="rank-number">{{ loop.index }}</span></td>
+                                <td>
+                                    <a
+                                        href="#graphSection"
+                                        class="url-cell text-decoration-none graph-node-link"
+                                        data-node-id="{{ url }}"
+                                        title="Klik untuk melihat node ini pada graph">
+                                        {{ url }}
+                                    </a>
+                                </td>
+                                <td>
+                                    <span class="badge bg-primary pagerank-badge">{{ "%.6f"|format(score) }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-5 text-muted">
+                    <i class="bi bi-exclamation-triangle display-4"></i>
+                    <p class="mt-3">No PageRank data available</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Actions -->
+<div class="row mt-4">
+    <div class="col-12 text-center">
+        <a href="{{ url_for('index') }}" class="btn btn-primary">
+            <i class="bi bi-plus-circle me-2"></i>Crawl Another Site
+        </a>
+    </div>
+</div>
+
+{% if job.result.errors %}
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card border-warning">
+            <div class="card-header bg-warning text-dark">
+                <h6 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Warnings ({{ job.result.errors|length }})</h6>
+            </div>
+            <div class="card-body">
+                <ul class="mb-0 small">
+                    {% for error in job.result.errors %}
+                    <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function resetGraphView() {
+        const iframe = document.getElementById('graphFrame');
+        if (iframe && iframe.contentWindow) {
+            // Try to call pyvis network fit method
+            try {
+                iframe.contentWindow.postMessage({type: 'showAll'}, '*');
+            } catch (e) {
+                // Reload iframe as fallback
+                iframe.src = iframe.src;
+            }
+        }
+    }
+
+    // Meminta iframe menampilkan node dari URL yang diklik pada tabel.
+    function focusGraphNode(nodeId) {
+        const iframe = document.getElementById('graphFrame');
+        const graphSection = document.getElementById('graphSection');
+
+        if (graphSection) {
+            graphSection.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start'
+            });
+        }
+
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+                type: 'focusNode',
+                nodeId: nodeId
+            }, '*');
+        }
+    }
+
+    // Pasang event pada setiap URL di tabel Top 10.
+    document.addEventListener('DOMContentLoaded', () => {
+        const iframe = document.getElementById('graphFrame');
+        const links = document.querySelectorAll('.graph-node-link');
+
+        links.forEach((link) => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                focusGraphNode(link.dataset.nodeId);
+            });
+        });
+
+        if (iframe) {
+            iframe.addEventListener('load', () => {
+                console.log('Graph loaded');
+            });
+        }
+    });
+</script>
+{% endblock %}

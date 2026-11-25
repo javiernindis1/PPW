@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+
+{% block title %}Crawling & PageRank - {{ job.url }}{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/vis-network/styles/vis-network.min.css">
+<style>
+    #liveGraph { width: 100%; height: 570px; border: 1px solid #dee2e6; border-radius: 8px; background: #fff; }
+    .crawl-url { overflow-wrap: anywhere; }
+    .rank-table-wrap { max-height: 650px; overflow: auto; }
+    .rank-row { cursor: pointer; }
+    .rank-row:hover { background: #eef5ff !important; }
+    .rank-row.selected { background: #dceaff !important; }
+    .rank-url { max-width: 560px; overflow-wrap: anywhere; }
+    #resultsSection { display: block; }
+    @media (max-width: 768px) { #liveGraph { height: 430px; } }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script>
+    let liveNetwork = null;
+    let liveNodes = null;
+    let liveEdges = null;
+    const knownNodes = new Set();
+    const knownEdges = new Set();
+    let pollStopped = false;
+    let hasInitialFit = false;
+    let focusedNodeId = null;
+    let currentGraphEdges = [];
+    const TOP_NODE_COLOR = { background: '#f59e0b', border: '#b45309', highlight: { background: '#fbbf24', border: '#92400e' }, hover: { background: '#fbbf24', border: '#92400e' } };
+    const NORMAL_NODE_COLOR = { background: '#60a5fa', border: '#2563eb', highlight: { background: '#93c5fd', border: '#1d4ed8' }, hover: { background: '#93c5fd', border: '#1d4ed8' } };
+
+    function initializeLiveGraph() {
+        liveNodes = new vis.DataSet([]);
+        liveEdges = new vis.DataSet([]);
+        liveNetwork = new vis.Network(document.getElementById('liveGraph'), {
+            nodes: liveNodes, edges: liveEdges
+        }, {
+            autoResize: true,
+            interaction: { hover: true, navigationButtons: true, keyboard: true, multiselect: true },
+            physics: {
+                enabled: true,
+                solver: 'barnesHut',
+                barnesHut: { gravitationalConstant: -2200, centralGravity: 0.25, springLength: 145, springConstant: 0.04, damping: 0.12 },
+                stabilization: { enabled: true, iterations: 250, updateInterval: 50 }
+            },
+            nodes: { font: { size: 12, face: 'Arial' }, borderWidth: 1, color: NORMAL_NODE_COLOR },
+            edges: { smooth: { type: 'dynamic' }, width: 1, arrows: { to: { enabled: true, scaleFactor: 0.6 } } }
+        });
+        liveNetwork.on('click', function(params) {
+            if (params.nodes.length) focusNode(params.nodes[0]);
+        });
+    }
+
+    function updateNodeStyles() {
+        if (!liveNodes || !liveEdges) return;
+        const inlinks = new Map();
+        knownNodes.forEach(id => inlinks.set(id, 0));
+        currentGraphEdges.forEach(edge => inlinks.set(edge.to, (inlinks.get(edge.to) || 0) + 1));
+        const topIds = new Set(
+            Array.from(inlinks.entries())
+                .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+                .slice(0, 10)
+                .map(entry => entry[0])
+        );
+        const updates = Array.from(knownNodes).map(id => ({
+            id,
+            size: topIds.has(id) ? 31 : 17,
+            borderWidth: topIds.has(id) ? 3 : 1,
+            color: topIds.has(id) ? TOP_NODE_COLOR : NORMAL_NODE_COLOR,
+            font: { size: topIds.has(id) ? 15 : 11, face: 'Arial', bold: topIds.has(id) }
+        }));
+        if (updates.length) liveNodes.update(updates);
+    }
+
+    function applyFocusedView() {
+        if (!focusedNodeId || !liveNodes.get(focusedNodeId)) return;
+        const connectedIds = liveNetwork.getConnectedNodes(focusedNodeId);
+        const visibleIds = new Set([focusedNodeId, ...connectedIds]);
+        liveNodes.update(Array.from(knownNodes).map(id => ({ id, hidden: !visibleIds.has(id) })));
+        liveEdges.update(currentGraphEdges.map(edge => ({
+            id: edge.id,
+            hidden: !(edge.from === focusedNodeId || edge.to === focusedNodeId)
+        })));
+        document.getElementById('showAllButton').classList.remove('d-none');
+        document.getElementById('focusHint').textContent = 'Mode fokus: menampilkan node terpilih dan node yang terhubung langsung.';
+    }
+
+    function updateLiveGraph(graph) {
+        if (!graph || !liveNodes || !liveEdges) return;
+        currentGraphEdges = graph.edges || [];
+        const newNodes = (graph.nodes || []).filter(node => !knownNodes.has(node.id));
+        const newEdges = currentGraphEdges.filter(edge => !knownEdges.has(edge.id));
+        if (newNodes.length) {
+            newNodes.forEach(node => knownNodes.add(node.id));
+            liveNodes.add(newNodes);
+            liveNetwork.setOptions({ physics: { enabled: true } });
+        }
+        if (newEdges.length) {
+            newEdges.forEach(edge => knownEdges.add(edge.id));
+            liveEdges.add(newEdges);
+        }
+        updateNodeStyles();
+        if (focusedNodeId) applyFocusedView();
+        if (!hasInitialFit && knownNodes.size) {
+            hasInitialFit = true;
+            liveNetwork.fit({ animation: { duration: 450 } });
+        }
+        document.getElementById('nodeCount').textContent = knownNodes.size;
+        document.getElementById('edgeCount').textContent = knownEdges.size;
+    }
+
+    function focusNode(nodeId) {
+        if (!liveNodes.get(nodeId)) return;
+        focusedNodeId = nodeId;
+        applyFocusedView();
+        liveNetwork.selectNodes([nodeId]);
+        liveNetwork.focus(nodeId, { scale: 1.25, animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+        document.querySelectorAll('.rank-row').forEach(item => {
+            item.classList.toggle('selected', item.dataset.nodeId === nodeId);
+        });
+    }
+
+    let renderedCrawledCount = 0;
+    const renderedGraphNodeIds = new Set();
+
+    function renderCrawledLinks(urls) {
+        const tbody = document.getElementById('crawledLinksBody');
+        if (!tbody) return;
+
+        const links = urls || [];
+        if (links.length === 0) return;
+
+        // Append only new URLs; the backend list is already in crawl order.
+        for (let i = renderedCrawledCount; i < links.length; i++) {
+            const tr = document.createElement('tr');
+
+            const number = document.createElement('td');
+            number.className = 'text-center fw-semibold';
+            number.textContent = i + 1;
+
+            const urlCell = document.createElement('td');
+            urlCell.className = 'rank-url';
+            urlCell.textContent = links[i];
+            urlCell.title = links[i];
+
+            const statusCell = document.createElement('td');
+            statusCell.className = 'text-center';
+            statusCell.innerHTML = '<span class="badge bg-success">Berhasil di-crawl</span>';
+
+            tr.className = 'rank-row';
+            tr.dataset.nodeId = links[i];
+            tr.addEventListener('click', () => focusNode(links[i]));
+            tr.append(number, urlCell, statusCell);
+            tbody.appendChild(tr);
+        }
+
+        renderedCrawledCount = links.length;
+        document.getElementById('crawledLinksCount').textContent = links.length;
+        document.getElementById('crawledLinksEmpty').classList.add('d-none');
+    }
+
+    function renderGraphNodes(nodes) {
+        const tbody = document.getElementById('graphNodesBody');
+        if (!tbody) return;
+
+        (nodes || []).forEach(node => {
+            if (renderedGraphNodeIds.has(node.id)) return;
+            renderedGraphNodeIds.add(node.id);
+
+            const tr = document.createElement('tr');
+            tr.className = 'rank-row';
+            tr.dataset.nodeId = node.id;
+            tr.addEventListener('click', () => focusNode(node.id));
+
+            const number = document.createElement('td');
+            number.className = 'text-center fw-semibold';
+            number.textContent = renderedGraphNodeIds.size;
+
+            const url = document.createElement('td');
+            url.className = 'rank-url';
+            url.textContent = node.id;
+            url.title = node.id;
+
+            const label = document.createElement('td');
+            label.className = 'text-center';
+            label.textContent = node.label || '-';
+
+            tr.append(number, url, label);
+            tbody.appendChild(tr);
+        });
+
+        document.getElementById('graphNodesCount').textContent = renderedGraphNodeIds.size;
+        if (renderedGraphNodeIds.size) {
+            document.getElementById('graphNodesEmpty').classList.add('d-none');
+        }
+    }
+
+    function renderRankings(rankings) {
+        const tbody = document.getElementById('rankingBody');
+        tbody.replaceChildren();
+        (rankings || []).forEach(item => {
+            const tr = document.createElement('tr');
+            tr.className = 'rank-row';
+            tr.dataset.nodeId = item.url;
+            tr.addEventListener('click', () => focusNode(item.url));
+
+            const rank = document.createElement('td');
+            rank.className = 'fw-bold';
+            rank.textContent = item.rank;
+            const url = document.createElement('td');
+            url.className = 'rank-url';
+            url.textContent = item.url;
+            url.title = item.url;
+            const inlinks = document.createElement('td');
+            inlinks.className = 'text-center';
+            inlinks.textContent = item.inlinks;
+            const score = document.createElement('td');
+            score.className = 'text-end';
+            score.textContent = Number(item.pagerank).toFixed(8);
+            tr.append(rank, url, inlinks, score);
+            tbody.appendChild(tr);
+        });
+        document.getElementById('rankingCount').textContent = (rankings || []).length;
+        document.getElementById('resultsSection').style.display = 'block';
+    }
+
+    function showAllNodes() {
+        focusedNodeId = null;
+        liveNodes.update(Array.from(knownNodes).map(id => ({ id, hidden: false })));
+        liveEdges.update(currentGraphEdges.map(edge => ({ id: edge.id, hidden: false })));
+        liveNetwork.unselectAll();
+        document.getElementById('showAllButton').classList.add('d-none');
+        document.getElementById('focusHint').textContent = '10 node teratas berdasarkan link masuk ditandai dengan warna emas dan ukuran lebih besar.';
+        document.querySelectorAll('.rank-row.selected').forEach(item => item.classList.remove('selected'));
+        liveNetwork.fit({ animation: { duration: 450, easingFunction: 'easeInOutQuad' } });
+    }
+
+    async function pollJobStatus() {
+        if (pollStopped) return;
+        try {
+            const response = await fetch(`/api/job/{{ job.id }}`);
+            if (!response.ok) throw new Error('Gagal mengambil status crawling');
+            const data = await response.json();
+            document.getElementById('statusMessage').textContent = data.message;
+            updateLiveGraph(data.graph);
+            renderCrawledLinks(data.crawled_links || []);
+            renderGraphNodes(data.graph ? data.graph.nodes : []);
+
+            const pages = Number(data.pages_crawled || 0);
+            const limit = Number(data.max_pages || 1);
+            const percent = data.status === 'completed' ? 100 : Math.min(95, (pages / limit) * 100);
+            const progressBar = document.getElementById('progressBar');
+            progressBar.style.width = percent + '%';
+            progressBar.setAttribute('aria-valuenow', percent);
+            document.getElementById('detailMessage').textContent = `${pages} halaman diproses dari batas ${limit} halaman.`;
+
+            if (data.status === 'completed') {
+                pollStopped = true;
+                liveNetwork.setOptions({ physics: { enabled: false } });
+                if (focusedNodeId) applyFocusedView();
+                else liveNetwork.fit({ animation: { duration: 500 } });
+                progressBar.classList.remove('progress-bar-animated');
+                progressBar.classList.remove('progress-bar-striped');
+                progressBar.classList.add('bg-success');
+                document.getElementById('spinner').classList.add('d-none');
+                document.getElementById('statusHeading').innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>Crawling Selesai';
+                document.getElementById('detailMessage').textContent = 'Analisis PageRank selesai. Hasil ditampilkan di halaman ini.';
+                renderRankings(data.result ? data.result.rankings : []);
+                document.getElementById('pagesSummary').textContent = data.pages_crawled;
+                document.getElementById('linksSummary').textContent = knownEdges.size;
+                return;
+            }
+
+            if (data.status === 'error') {
+                pollStopped = true;
+                progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                progressBar.classList.add('bg-danger');
+                document.getElementById('spinner').classList.add('d-none');
+                document.getElementById('statusHeading').textContent = 'Crawling Gagal';
+                document.getElementById('statusMessage').classList.add('text-danger');
+                document.getElementById('retryLink').classList.remove('d-none');
+                return;
+            }
+        } catch (error) {
+            console.error('Error polling job status:', error);
+        }
+        setTimeout(pollJobStatus, 1100);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeLiveGraph();
+        pollJobStatus();
+    });
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row justify-content-center mb-3">
+        <div class="col-12 col-xl-11">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h4 class="mb-0" id="statusHeading"><i class="bi bi-hourglass-split me-2"></i>Crawling Berlangsung</h4>
+                    <span class="badge bg-primary" id="statusBadge">LIVE</span>
+                </div>
+                <div class="card-body text-center">
+                    <div id="spinner" class="mb-2"><div class="spinner-border spinner-border-sm text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>
+                    <h6 id="statusMessage" class="mb-3">{{ job.message }}</h6>
+                    <div class="progress mx-auto mb-3" style="max-width: 700px; height: 12px;">
+                        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                    <p class="text-muted small mb-0">Target: <strong class="crawl-url">{{ job.url }}</strong></p>
+                    <p id="detailMessage" class="text-muted small mt-1">Menunggu halaman pertama...</p>
+                    <div id="retryLink" class="d-none mt-3"><a href="{{ url_for('index') }}" class="btn btn-outline-primary">Coba URL Lain</a></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row justify-content-center mb-4">
+        <div class="col-12 col-xl-11">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Live Link Graph</h5>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <div class="small text-muted"><span id="nodeCount">0</span> Nodes · <span id="edgeCount">0</span> Links</div>
+                        <button id="showAllButton" type="button" class="btn btn-sm btn-outline-secondary d-none" onclick="showAllNodes()"><i class="bi bi-arrow-counterclockwise me-1"></i>Kembali / Tampilkan Semua</button>
+                    </div>
+                </div>
+                <div class="card-body p-2"><div id="liveGraph"></div><p id="focusHint" class="small text-muted mt-2 mb-0">10 node teratas berdasarkan link masuk ditandai dengan warna emas dan ukuran lebih besar. Klik node atau baris tabel untuk melihat koneksinya.</p></div>
+                <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <small class="text-muted">Node dan panah bertambah selama crawling. Klik node atau baris ranking untuk fokus ke node.</small>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="showAllNodes()"><i class="bi bi-arrows-fullscreen me-1"></i>Tampilkan Semua</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row justify-content-center mb-4" id="resultsSection">
+        <div class="col-12 col-xl-11">
+            <div class="row g-3 mb-3">
+                <div class="col-md-6"><div class="card text-center"><div class="card-body"><h3 id="pagesSummary" class="mb-0">0</h3><small class="text-muted">Pages Crawled</small></div></div></div>
+                <div class="col-md-6"><div class="card text-center"><div class="card-body"><h3 id="linksSummary" class="mb-0">0</h3><small class="text-muted">Links / Edges</small></div></div></div>
+            </div>
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0"><i class="bi bi-trophy me-2"></i>Ranking Halaman</h5>
+                    <span class="small text-muted"><span id="rankingCount">0</span> halaman · Diurutkan berdasarkan link masuk</span>
+                </div>
+                <div class="table-responsive rank-table-wrap">
+                    <table class="table table-hover table-striped align-middle mb-0">
+                        <thead class="table-light"><tr><th style="width:70px">Rank</th><th>URL</th><th class="text-center" style="width:150px">Link Masuk</th><th class="text-end" style="width:180px">PageRank Score</th></tr></thead>
+                        <tbody id="rankingBody"><tr><td colspan="4" class="text-center text-muted py-4">Ranking akan muncul setelah crawling selesai.</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="card-footer small text-muted">Link masuk (in-degree) adalah jumlah edge dari halaman lain yang menuju URL tersebut. PageRank Score tetap dihitung menggunakan algoritma PageRank.</div>
+            </div>
+            <div class="card mt-4">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0"><i class="bi bi-list-ol me-2"></i>Seluruh Link yang Di-crawl</h5>
+                    <span class="small text-muted"><span id="crawledLinksCount">0</span> URL · Urutan crawling</span>
+                </div>
+                <div class="table-responsive rank-table-wrap">
+                    <table class="table table-hover table-striped align-middle mb-0">
+                        <thead class="table-light">
+                            <tr><th class="text-center" style="width:80px">No.</th><th>URL</th><th class="text-center" style="width:190px">Status</th></tr>
+                        </thead>
+                        <tbody id="crawledLinksBody">
+                            <tr id="crawledLinksEmpty"><td colspan="3" class="text-center text-muted py-4">Menunggu halaman berhasil di-crawl...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="card-footer small text-muted">Daftar ini diperbarui selama proses crawling. Nomor menunjukkan urutan halaman berhasil diakses oleh crawler, dari pertama hingga terakhir.</div>
+            </div>
+            <div class="card mt-4">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Seluruh Link pada Node</h5>
+                    <span class="small text-muted"><span id="graphNodesCount">0</span> node · Klik URL untuk menuju node</span>
+                </div>
+                <div class="table-responsive rank-table-wrap">
+                    <table class="table table-hover table-striped align-middle mb-0">
+                        <thead class="table-light">
+                            <tr><th class="text-center" style="width:80px">No.</th><th>URL Node</th><th class="text-center" style="width:240px">Label Node</th></tr>
+                        </thead>
+                        <tbody id="graphNodesBody">
+                            <tr id="graphNodesEmpty"><td colspan="3" class="text-center text-muted py-4">Menunggu node ditemukan...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="card-footer small text-muted">Daftar ini mencakup semua node pada graph, termasuk URL tujuan link yang belum berhasil di-crawl. Klik baris untuk memfokuskan node dan koneksi langsungnya pada graph.</div>
+            </div>
+            <div class="text-center mt-3"><a href="{{ url_for('index') }}" class="btn btn-primary"><i class="bi bi-plus-circle me-2"></i>Crawl Website Lain</a></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
